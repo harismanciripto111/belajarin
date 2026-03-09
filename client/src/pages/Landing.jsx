@@ -440,7 +440,7 @@ export default function Landing() {
                     ))}
                   </div>
                   <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: '14px', lineHeight: 1.8, fontStyle: 'italic' }}>
-                    "{t.text}"
+                    “{t.text}”
                   </p>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: 'auto' }}>
                     <div style={{
