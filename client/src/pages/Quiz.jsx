@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
 import axios from 'axios'
 import {
   FiCpu, FiCheckCircle, FiXCircle, FiAward,
-  FiRefreshCw, FiChevronRight, FiBookOpen, FiList
+  FiRefreshCw, FiChevronRight, FiBookOpen, FiList,
+  FiFileText, FiUpload, FiCheck
 } from 'react-icons/fi'
 import Sidebar from '../components/Sidebar.jsx'
 
@@ -21,18 +22,26 @@ const DIFFICULTY_OPTS = [
 ]
 
 export default function Quiz() {
-  const [inputText, setInputText]       = useState('')
+  const [inputText, setInputText]         = useState('')
   const [questionCount, setQuestionCount] = useState(10)
-  const [difficulty, setDifficulty]     = useState('sedang')
-  const [loading, setLoading]           = useState(false)
-  const [questions, setQuestions]       = useState([])
-  const [currentIndex, setCurrentIndex] = useState(0)
-  const [selected, setSelected]         = useState(null)   // index of chosen option
-  const [answered, setAnswered]         = useState(false)
-  const [score, setScore]               = useState(0)
-  const [step, setStep]                 = useState('input') // 'input' | 'quiz' | 'result'
-  const [answers, setAnswers]           = useState([])      // {correct: bool, selected, correctIndex}
-  const [showReview, setShowReview]     = useState(false)
+  const [difficulty, setDifficulty]       = useState('sedang')
+  const [loading, setLoading]             = useState(false)
+  const [questions, setQuestions]         = useState([])
+  const [currentIndex, setCurrentIndex]   = useState(0)
+  const [selected, setSelected]           = useState(null)
+  const [answered, setAnswered]           = useState(false)
+  const [score, setScore]                 = useState(0)
+  const [step, setStep]                   = useState('input') // 'input' | 'quiz' | 'result'
+  const [answers, setAnswers]             = useState([])
+  const [showReview, setShowReview]       = useState(false)
+
+  // Source selector
+  const [sourceMode, setSourceMode]       = useState('text') // 'text' | 'notes' | 'pdf'
+  const [savedNotes, setSavedNotes]       = useState([])
+  const [selectedNote, setSelectedNote]   = useState(null)
+  const [pdfFile, setPdfFile]             = useState(null)
+  const [pdfUploading, setPdfUploading]   = useState(false)
+  const fileInputRef                      = useRef(null)
 
   /* ── Pre-fill from sessionStorage ── */
   useEffect(() => {
@@ -42,6 +51,36 @@ export default function Quiz() {
       sessionStorage.removeItem('belajarin_text')
     }
   }, [])
+
+  /* ── Load saved AI notes ── */
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('belajarin_notes')
+      if (raw) setSavedNotes(JSON.parse(raw))
+    } catch {}
+  }, [])
+
+  /* ── PDF Upload ── */
+  const handlePdfUpload = async (file) => {
+    if (!file) return
+    if (file.type !== 'application/pdf') { toast.error('Hanya file PDF yang diizinkan.'); return }
+    setPdfFile(file)
+    setPdfUploading(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await axios.post('/api/upload/pdf', form, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      setInputText(res.data.text)
+      toast.success(`PDF berhasil dibaca! (${res.data.pages} halaman, ${res.data.wordCount} kata)`)
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Gagal membaca PDF.')
+      setPdfFile(null)
+    } finally {
+      setPdfUploading(false)
+    }
+  }
 
   /* ── Generate Quiz ── */
   const handleGenerate = async () => {
@@ -111,6 +150,10 @@ export default function Quiz() {
     setScore(0)
     setAnswers([])
     setShowReview(false)
+    setSourceMode('text')
+    setInputText('')
+    setPdfFile(null)
+    setSelectedNote(null)
   }
 
   /* ── Retry same questions ── */
@@ -130,9 +173,9 @@ export default function Quiz() {
   const diffStyle = DIFFICULTY_OPTS.find(d => d.value === difficulty) || DIFFICULTY_OPTS[1]
 
   const getGrade = (p) => {
-    if (p >= 90) return { label: 'Sempurna!',    color: '#86efac', emoji: '🏆' }
+    if (p >= 90) return { label: 'Sempurna!',     color: '#86efac', emoji: '🏆' }
     if (p >= 75) return { label: 'Bagus Sekali!', color: '#86efac', emoji: '🎉' }
-    if (p >= 60) return { label: 'Cukup Baik',   color: '#fcd34d', emoji: '👍' }
+    if (p >= 60) return { label: 'Cukup Baik',    color: '#fcd34d', emoji: '👍' }
     if (p >= 40) return { label: 'Perlu Belajar', color: '#fcd34d', emoji: '📚' }
     return               { label: 'Tetap Semangat!', color: '#fca5a5', emoji: '💪' }
   }
@@ -171,19 +214,126 @@ export default function Quiz() {
               exit="exit"
               className="quiz-card"
             >
-              {/* Textarea */}
+              {/* ── Source Mode Selector ── */}
               <div className="form-group">
-                <label className="form-label">Materi Pelajaran</label>
-                <textarea
-                  className="form-textarea"
-                  rows={9}
-                  placeholder="Tempelkan materi pelajaran di sini. AI akan membuat soal pilihan ganda secara otomatis..."
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                />
+                <label className="form-label">Sumber Materi</label>
+                <div className="source-tabs">
+                  {[
+                    { id: 'text',  icon: <FiFileText size={15}/>, label: 'Teks Manual' },
+                    { id: 'notes', icon: <FiBookOpen size={15}/>, label: 'Catatan AI'  },
+                    { id: 'pdf',   icon: <FiUpload   size={15}/>, label: 'Upload PDF'  },
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      className={`source-tab ${sourceMode === tab.id ? 'active' : ''}`}
+                      onClick={() => {
+                        setSourceMode(tab.id)
+                        setInputText('')
+                        setPdfFile(null)
+                        setSelectedNote(null)
+                      }}
+                    >
+                      {tab.icon} {tab.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {/* Settings Row */}
+              {/* ── MODE: Teks Manual ── */}
+              {sourceMode === 'text' && (
+                <div className="form-group">
+                  <textarea
+                    className="form-textarea"
+                    rows={9}
+                    placeholder="Tempelkan materi pelajaran di sini. AI akan membuat soal pilihan ganda secara otomatis..."
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                  />
+                </div>
+              )}
+
+              {/* ── MODE: Catatan AI ── */}
+              {sourceMode === 'notes' && (
+                <div className="form-group">
+                  {savedNotes.length === 0 ? (
+                    <div className="empty-source">
+                      <FiBookOpen size={32} style={{ opacity: 0.35, marginBottom: 10 }} />
+                      <p style={{ margin: 0, fontWeight: 600 }}>Belum ada catatan tersimpan</p>
+                      <p style={{ margin: '6px 0 0', fontSize: 13, opacity: 0.55 }}>
+                        Buat catatan di halaman <strong>Catatan AI</strong> terlebih dahulu.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="notes-list">
+                      {savedNotes.map((note, i) => (
+                        <button
+                          key={i}
+                          className={`note-item ${selectedNote === i ? 'active' : ''}`}
+                          onClick={() => {
+                            setSelectedNote(i)
+                            setInputText(note.summary || note.content || note.text || '')
+                          }}
+                        >
+                          <div className="note-item-title">{note.title || `Catatan ${i + 1}`}</div>
+                          <div className="note-item-preview">
+                            {(note.summary || note.content || note.text || '').slice(0, 90)}...
+                          </div>
+                          {selectedNote === i && <FiCheck size={14} className="note-check" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── MODE: Upload PDF ── */}
+              {sourceMode === 'pdf' && (
+                <div className="form-group">
+                  <div
+                    className={`pdf-dropzone ${pdfFile && inputText ? 'has-file' : ''}`}
+                    onClick={() => fileInputRef.current?.click()}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const f = e.dataTransfer.files[0]
+                      if (f) handlePdfUpload(f)
+                    }}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="application/pdf"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const f = e.target.files[0]
+                        if (f) handlePdfUpload(f)
+                      }}
+                    />
+                    {pdfUploading ? (
+                      <><span className="spinner" style={{ marginBottom: 8 }} /> Membaca PDF...</>
+                    ) : pdfFile && inputText ? (
+                      <>
+                        <FiCheck size={28} style={{ color: '#86efac', marginBottom: 8 }} />
+                        <p style={{ margin: 0, color: '#86efac', fontWeight: 600 }}>{pdfFile.name}</p>
+                        <p style={{ margin: '6px 0 0', fontSize: 13, opacity: 0.55 }}>
+                          Teks berhasil diekstrak. Klik untuk ganti file.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <FiUpload size={32} style={{ opacity: 0.45, marginBottom: 10 }} />
+                        <p style={{ margin: 0, fontWeight: 500 }}>
+                          Drag & drop PDF ke sini, atau{' '}
+                          <span style={{ color: '#43E97B' }}>klik untuk pilih</span>
+                        </p>
+                        <p style={{ margin: '6px 0 0', fontSize: 12, opacity: 0.45 }}>Maks. 20 MB</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Settings Row ── */}
               <div className="settings-row">
                 {/* Question Count */}
                 <div className="form-group" style={{ flex: 1 }}>
@@ -224,11 +374,11 @@ export default function Quiz() {
                 </div>
               </div>
 
-              {/* Generate */}
+              {/* ── Generate Button ── */}
               <motion.button
                 className="btn-primary"
                 onClick={handleGenerate}
-                disabled={loading}
+                disabled={loading || pdfUploading}
                 whileHover={{ scale: loading ? 1 : 1.02 }}
                 whileTap={{ scale: loading ? 1 : 0.98 }}
               >
@@ -286,8 +436,8 @@ export default function Quiz() {
                     {(q.options || []).map((opt, idx) => {
                       let state = 'default'
                       if (answered) {
-                        if (idx === q.correctIndex)              state = 'correct'
-                        else if (idx === selected)               state = 'wrong'
+                        if (idx === q.correctIndex)             state = 'correct'
+                        else if (idx === selected)              state = 'wrong'
                       }
                       return (
                         <motion.button
@@ -301,9 +451,7 @@ export default function Quiz() {
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: idx * 0.07 }}
                         >
-                          <span className="option-letter">
-                            {String.fromCharCode(65 + idx)}
-                          </span>
+                          <span className="option-letter">{String.fromCharCode(65 + idx)}</span>
                           <span className="option-text">{opt}</span>
                           {answered && idx === q.correctIndex && <FiCheckCircle size={18} className="opt-icon correct-icon" />}
                           {answered && idx === selected && idx !== q.correctIndex && <FiXCircle size={18} className="opt-icon wrong-icon" />}
@@ -416,10 +564,7 @@ export default function Quiz() {
                   </motion.button>
                 </div>
 
-                <button
-                  className="review-toggle"
-                  onClick={() => setShowReview(v => !v)}
-                >
+                <button className="review-toggle" onClick={() => setShowReview(v => !v)}>
                   <FiList size={16} />
                   {showReview ? 'Sembunyikan Pembahasan' : 'Lihat Pembahasan'}
                 </button>
@@ -429,18 +574,15 @@ export default function Quiz() {
               <AnimatePresence>
                 {showReview && (
                   <motion.div
-                    initial={{ opacity: 0, y: 12 }}
+                    initial={{ opacity: 0, y: 16 }}
                     animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 12 }}
-                    transition={{ duration: 0.3 }}
+                    exit={{ opacity: 0, y: 16 }}
+                    transition={{ duration: 0.35 }}
                   >
-                    {answers.map((a, idx) => (
-                      <div key={idx} className={`review-item ${a.correct ? 'review-correct' : 'review-wrong'}`}>
+                    {answers.map((a, i) => (
+                      <div key={i} className={`review-item ${a.correct ? 'review-correct' : 'review-wrong'}`}>
                         <div className="review-q-row">
-                          <span className="review-num">#{idx + 1}</span>
-                          {a.correct
-                            ? <FiCheckCircle size={16} className="correct-icon" />
-                            : <FiXCircle     size={16} className="wrong-icon"   />}
+                          <span className="review-num">#{i + 1}</span>
                           <p className="review-q">{a.question}</p>
                         </div>
                         <div className="review-opts">
@@ -569,6 +711,111 @@ export default function Quiz() {
         }
         .form-textarea::placeholder { color: var(--text-dim); }
 
+        /* Source Tabs */
+        .source-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+        .source-tab {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          padding: 9px 18px;
+          border-radius: 9px;
+          border: 1px solid rgba(255,255,255,0.1);
+          background: rgba(255,255,255,0.04);
+          color: rgba(255,255,255,0.55);
+          font-size: 13px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all .2s;
+        }
+        .source-tab:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        .source-tab.active {
+          background: rgba(67,233,123,0.15);
+          color: #86efac;
+          border-color: rgba(67,233,123,0.4);
+          font-weight: 600;
+        }
+
+        /* Notes List */
+        .notes-list {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          max-height: 300px;
+          overflow-y: auto;
+          padding-right: 4px;
+        }
+        .note-item {
+          position: relative;
+          text-align: left;
+          padding: 13px 16px;
+          border-radius: 10px;
+          border: 1px solid rgba(255,255,255,0.08);
+          background: rgba(255,255,255,0.03);
+          cursor: pointer;
+          transition: all .2s;
+          width: 100%;
+        }
+        .note-item:hover { background: rgba(255,255,255,0.07); }
+        .note-item.active {
+          border-color: rgba(67,233,123,0.4);
+          background: rgba(67,233,123,0.08);
+        }
+        .note-item-title {
+          font-size: 14px;
+          font-weight: 600;
+          color: #e2e8f0;
+          margin-bottom: 4px;
+        }
+        .note-item-preview {
+          font-size: 12px;
+          color: rgba(255,255,255,0.4);
+          line-height: 1.4;
+        }
+        .note-check {
+          position: absolute;
+          top: 13px;
+          right: 13px;
+          color: #43E97B;
+        }
+
+        /* Empty State */
+        .empty-source {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 44px 20px;
+          color: rgba(255,255,255,0.5);
+          text-align: center;
+          border: 1px dashed rgba(255,255,255,0.1);
+          border-radius: var(--radius-sm);
+        }
+
+        /* PDF Dropzone */
+        .pdf-dropzone {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 44px 20px;
+          border: 2px dashed rgba(255,255,255,0.14);
+          border-radius: 12px;
+          background: rgba(255,255,255,0.02);
+          cursor: pointer;
+          transition: all .2s;
+          min-height: 160px;
+          text-align: center;
+          color: rgba(255,255,255,0.55);
+        }
+        .pdf-dropzone:hover {
+          border-color: rgba(67,233,123,0.4);
+          background: rgba(67,233,123,0.04);
+        }
+        .pdf-dropzone.has-file {
+          border-color: rgba(67,233,123,0.4);
+          background: rgba(67,233,123,0.04);
+        }
+
         /* Settings Row */
         .settings-row { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 0; }
         .slider-header {
@@ -679,6 +926,7 @@ export default function Quiz() {
           border-radius: 50%;
           animation: spin 0.7s linear infinite;
           flex-shrink: 0;
+          display: inline-block;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -801,18 +1049,8 @@ export default function Quiz() {
         /* Score Ring */
         .score-ring-wrap { position: relative; width: 140px; height: 140px; }
         .score-ring { width: 140px; height: 140px; transform: rotate(-90deg); }
-        .ring-bg {
-          fill: none;
-          stroke: rgba(255,255,255,0.06);
-          stroke-width: 10;
-        }
-        .ring-fill {
-          fill: none;
-          stroke: url(#scoreGrad);
-          stroke-width: 10;
-          stroke-linecap: round;
-          stroke: #43E97B;
-        }
+        .ring-bg  { fill: none; stroke: rgba(255,255,255,0.06); stroke-width: 10; }
+        .ring-fill { fill: none; stroke: #43E97B; stroke-width: 10; stroke-linecap: round; }
         .ring-label {
           position: absolute;
           inset: 0;
@@ -822,12 +1060,12 @@ export default function Quiz() {
           justify-content: center;
         }
         .ring-pct { font-size: 28px; font-weight: 800; color: var(--text); }
-        .ring-sub  { font-size: 12px; color: var(--text-muted); }
+        .ring-sub { font-size: 12px; color: var(--text-muted); }
 
         /* Result Stats */
         .result-stats { display: flex; gap: 32px; }
         .r-stat { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-        .r-stat-icon { margin-bottom: 2px; }
+        .r-stat-icon  { margin-bottom: 2px; }
         .r-stat-val   { font-size: 24px; font-weight: 700; color: var(--text); }
         .r-stat-label { font-size: 12px; color: var(--text-muted); }
 
@@ -865,7 +1103,7 @@ export default function Quiz() {
         .rev-opt      { font-size: 13px; color: var(--text-muted); padding: 2px 0; }
         .correct-opt  { color: #86efac; font-weight: 600; }
         .wrong-opt    { color: #fca5a5; text-decoration: line-through; }
-        .review-exp   {
+        .review-exp {
           font-size: 13px;
           color: var(--text-muted);
           background: rgba(251,191,36,0.06);
@@ -877,11 +1115,13 @@ export default function Quiz() {
         }
 
         @media (max-width: 640px) {
-          .quiz-main    { padding: 24px 16px; }
-          .quiz-card    { padding: 20px; }
-          .settings-row { flex-direction: column; }
-          .result-stats { gap: 18px; }
+          .quiz-main      { padding: 24px 16px; }
+          .quiz-card      { padding: 20px; }
+          .settings-row   { flex-direction: column; }
+          .result-stats   { gap: 18px; }
           .result-actions { flex-direction: column; }
+          .source-tabs    { gap: 6px; }
+          .source-tab     { padding: 8px 12px; font-size: 12px; }
         }
       `}</style>
     </div>
