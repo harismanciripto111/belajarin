@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
 import axios from 'axios'
 import {
   FiZap, FiRotateCw, FiChevronLeft, FiChevronRight,
-  FiShuffle, FiRefreshCw, FiCpu
+  FiShuffle, FiRefreshCw, FiCpu, FiFileText, FiUpload,
+  FiBookOpen, FiCheck
 } from 'react-icons/fi'
 import Sidebar from '../components/Sidebar.jsx'
 
@@ -30,15 +31,23 @@ const DIFFICULTY_COLORS = {
 }
 
 export default function Flashcards() {
-  const [inputText, setInputText]     = useState('')
-  const [cardCount, setCardCount]     = useState(10)
-  const [loading, setLoading]         = useState(false)
-  const [cards, setCards]             = useState([])
+  const [inputText, setInputText]       = useState('')
+  const [cardCount, setCardCount]       = useState(10)
+  const [loading, setLoading]           = useState(false)
+  const [cards, setCards]               = useState([])
   const [currentIndex, setCurrentIndex] = useState(0)
-  const [isFlipped, setIsFlipped]     = useState(false)
-  const [step, setStep]               = useState('input')   // 'input' | 'study'
-  const [showAll, setShowAll]         = useState(false)
-  const [done, setDone]               = useState(false)
+  const [isFlipped, setIsFlipped]       = useState(false)
+  const [step, setStep]                 = useState('input')   // 'input' | 'study'
+  const [showAll, setShowAll]           = useState(false)
+  const [done, setDone]                 = useState(false)
+
+  // Source selector
+  const [sourceMode, setSourceMode]     = useState('text') // 'text' | 'notes' | 'pdf'
+  const [savedNotes, setSavedNotes]     = useState([])
+  const [selectedNote, setSelectedNote] = useState(null)
+  const [pdfFile, setPdfFile]           = useState(null)
+  const [pdfUploading, setPdfUploading] = useState(false)
+  const fileInputRef                    = useRef(null)
 
   /* ── Pre-fill from sessionStorage ── */
   useEffect(() => {
@@ -47,6 +56,14 @@ export default function Flashcards() {
       setInputText(saved)
       sessionStorage.removeItem('belajarin_text')
     }
+  }, [])
+
+  /* ── Load saved AI notes from localStorage ── */
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('belajarin_notes')
+      if (raw) setSavedNotes(JSON.parse(raw))
+    } catch {}
   }, [])
 
   /* ── Keyboard navigation ── */
@@ -60,6 +77,28 @@ export default function Flashcards() {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [step, currentIndex, showAll, done, cards.length])
+
+  /* ── PDF Upload ── */
+  const handlePdfUpload = async (file) => {
+    if (!file) return
+    if (file.type !== 'application/pdf') { toast.error('Hanya file PDF yang diizinkan.'); return }
+    setPdfFile(file)
+    setPdfUploading(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await axios.post('/api/upload/pdf', form, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      setInputText(res.data.text)
+      toast.success(`PDF berhasil dibaca! (${res.data.pages} halaman, ${res.data.wordCount} kata)`)
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Gagal membaca PDF.')
+      setPdfFile(null)
+    } finally {
+      setPdfUploading(false)
+    }
+  }
 
   /* ── Generate ── */
   const handleGenerate = async () => {
@@ -125,6 +164,10 @@ export default function Flashcards() {
     setIsFlipped(false)
     setDone(false)
     setShowAll(false)
+    setSourceMode('text')
+    setInputText('')
+    setPdfFile(null)
+    setSelectedNote(null)
   }
 
   const card = cards[currentIndex] || {}
@@ -153,6 +196,7 @@ export default function Flashcards() {
         </motion.div>
 
         <AnimatePresence mode="wait">
+
           {/* ════════ INPUT STEP ════════ */}
           {step === 'input' && (
             <motion.div
@@ -163,19 +207,126 @@ export default function Flashcards() {
               exit="exit"
               className="fc-card"
             >
-              {/* Textarea */}
+              {/* ── Source Mode Selector ── */}
               <div className="form-group">
-                <label className="form-label">Materi Pelajaran</label>
-                <textarea
-                  className="form-textarea"
-                  rows={10}
-                  placeholder="Tempelkan atau ketik materi pelajaran di sini. AI akan membuat flashcard secara otomatis dari konten yang kamu berikan..."
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                />
+                <label className="form-label">Sumber Materi</label>
+                <div className="source-tabs">
+                  {[
+                    { id: 'text',  icon: <FiFileText size={15}/>, label: 'Teks Manual' },
+                    { id: 'notes', icon: <FiBookOpen size={15}/>, label: 'Catatan AI'  },
+                    { id: 'pdf',   icon: <FiUpload   size={15}/>, label: 'Upload PDF'  },
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      className={`source-tab ${sourceMode === tab.id ? 'active' : ''}`}
+                      onClick={() => {
+                        setSourceMode(tab.id)
+                        setInputText('')
+                        setPdfFile(null)
+                        setSelectedNote(null)
+                      }}
+                    >
+                      {tab.icon} {tab.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {/* Slider */}
+              {/* ── MODE: Teks Manual ── */}
+              {sourceMode === 'text' && (
+                <div className="form-group">
+                  <textarea
+                    className="form-textarea"
+                    rows={10}
+                    placeholder="Tempelkan atau ketik materi pelajaran di sini. AI akan membuat flashcard secara otomatis..."
+                    value={inputText}
+                    onChange={(e) => setInputText(e.target.value)}
+                  />
+                </div>
+              )}
+
+              {/* ── MODE: Catatan AI ── */}
+              {sourceMode === 'notes' && (
+                <div className="form-group">
+                  {savedNotes.length === 0 ? (
+                    <div className="empty-source">
+                      <FiBookOpen size={32} style={{ opacity: 0.35, marginBottom: 10 }} />
+                      <p style={{ margin: 0, fontWeight: 600 }}>Belum ada catatan tersimpan</p>
+                      <p style={{ margin: '6px 0 0', fontSize: 13, opacity: 0.55 }}>
+                        Buat catatan di halaman <strong>Catatan AI</strong> terlebih dahulu.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="notes-list">
+                      {savedNotes.map((note, i) => (
+                        <button
+                          key={i}
+                          className={`note-item ${selectedNote === i ? 'active' : ''}`}
+                          onClick={() => {
+                            setSelectedNote(i)
+                            setInputText(note.summary || note.content || note.text || '')
+                          }}
+                        >
+                          <div className="note-item-title">{note.title || `Catatan ${i + 1}`}</div>
+                          <div className="note-item-preview">
+                            {(note.summary || note.content || note.text || '').slice(0, 90)}...
+                          </div>
+                          {selectedNote === i && <FiCheck size={14} className="note-check" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── MODE: Upload PDF ── */}
+              {sourceMode === 'pdf' && (
+                <div className="form-group">
+                  <div
+                    className={`pdf-dropzone ${pdfFile && inputText ? 'has-file' : ''}`}
+                    onClick={() => fileInputRef.current?.click()}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const f = e.dataTransfer.files[0]
+                      if (f) handlePdfUpload(f)
+                    }}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="application/pdf"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const f = e.target.files[0]
+                        if (f) handlePdfUpload(f)
+                      }}
+                    />
+                    {pdfUploading ? (
+                      <><span className="spinner" style={{ marginBottom: 8 }} /> Membaca PDF...</>
+                    ) : pdfFile && inputText ? (
+                      <>
+                        <FiCheck size={28} style={{ color: '#86efac', marginBottom: 8 }} />
+                        <p style={{ margin: 0, color: '#86efac', fontWeight: 600 }}>{pdfFile.name}</p>
+                        <p style={{ margin: '6px 0 0', fontSize: 13, opacity: 0.55 }}>
+                          Teks berhasil diekstrak. Klik untuk ganti file.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <FiUpload size={32} style={{ opacity: 0.45, marginBottom: 10 }} />
+                        <p style={{ margin: 0, fontWeight: 500 }}>
+                          Drag & drop PDF ke sini, atau{' '}
+                          <span style={{ color: '#818cf8' }}>klik untuk pilih</span>
+                        </p>
+                        <p style={{ margin: '6px 0 0', fontSize: 12, opacity: 0.45 }}>Maks. 20 MB</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Slider ── */}
               <div className="form-group">
                 <div className="slider-header">
                   <label className="form-label">Jumlah Kartu</label>
@@ -194,19 +345,17 @@ export default function Flashcards() {
                 </div>
               </div>
 
-              {/* Generate Button */}
+              {/* ── Generate Button ── */}
               <motion.button
                 className="btn-primary"
                 onClick={handleGenerate}
-                disabled={loading}
+                disabled={loading || pdfUploading}
                 whileHover={{ scale: loading ? 1 : 1.02 }}
                 whileTap={{ scale: loading ? 1 : 0.98 }}
               >
-                {loading ? (
-                  <><span className="spinner" />Generating Flashcard...</>
-                ) : (
-                  <><FiCpu size={18} />Generate Flashcard</>
-                )}
+                {loading
+                  ? <><span className="spinner" />Generating Flashcard...</>
+                  : <><FiCpu size={18} />Generate Flashcard</>}
               </motion.button>
             </motion.div>
           )}
@@ -431,7 +580,6 @@ export default function Flashcards() {
           --primary:   #6C63FF;
           --secondary: #FF6584;
           --accent:    #43E97B;
-          --bg:        #0F0F1A;
           --bg-card:   rgba(255,255,255,0.04);
           --bg-card-hover: rgba(255,255,255,0.07);
           --border:    rgba(255,255,255,0.08);
@@ -444,7 +592,6 @@ export default function Flashcards() {
           --shadow:    0 8px 32px rgba(0,0,0,0.4);
         }
 
-        /* Layout */
         .fc-main {
           flex: 1;
           padding: 40px 48px;
@@ -531,6 +678,111 @@ export default function Flashcards() {
           box-shadow: 0 0 0 3px rgba(108,99,255,0.15);
         }
         .form-textarea::placeholder { color: var(--text-dim); }
+
+        /* Source Tabs */
+        .source-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+        .source-tab {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          padding: 9px 18px;
+          border-radius: 9px;
+          border: 1px solid rgba(255,255,255,0.1);
+          background: rgba(255,255,255,0.04);
+          color: rgba(255,255,255,0.55);
+          font-size: 13px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all .2s;
+        }
+        .source-tab:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        .source-tab.active {
+          background: rgba(108,99,255,0.18);
+          color: #a89fff;
+          border-color: rgba(108,99,255,0.45);
+          font-weight: 600;
+        }
+
+        /* Notes List */
+        .notes-list {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          max-height: 300px;
+          overflow-y: auto;
+          padding-right: 4px;
+        }
+        .note-item {
+          position: relative;
+          text-align: left;
+          padding: 13px 16px;
+          border-radius: 10px;
+          border: 1px solid rgba(255,255,255,0.08);
+          background: rgba(255,255,255,0.03);
+          cursor: pointer;
+          transition: all .2s;
+          width: 100%;
+        }
+        .note-item:hover { background: rgba(255,255,255,0.07); }
+        .note-item.active {
+          border-color: rgba(108,99,255,0.45);
+          background: rgba(108,99,255,0.1);
+        }
+        .note-item-title {
+          font-size: 14px;
+          font-weight: 600;
+          color: #e2e8f0;
+          margin-bottom: 4px;
+        }
+        .note-item-preview {
+          font-size: 12px;
+          color: rgba(255,255,255,0.4);
+          line-height: 1.4;
+        }
+        .note-check {
+          position: absolute;
+          top: 13px;
+          right: 13px;
+          color: #818cf8;
+        }
+
+        /* Empty State */
+        .empty-source {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 44px 20px;
+          color: rgba(255,255,255,0.5);
+          text-align: center;
+          border: 1px dashed rgba(255,255,255,0.1);
+          border-radius: var(--radius-sm);
+        }
+
+        /* PDF Dropzone */
+        .pdf-dropzone {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 44px 20px;
+          border: 2px dashed rgba(255,255,255,0.14);
+          border-radius: 12px;
+          background: rgba(255,255,255,0.02);
+          cursor: pointer;
+          transition: all .2s;
+          min-height: 160px;
+          text-align: center;
+          color: rgba(255,255,255,0.55);
+        }
+        .pdf-dropzone:hover {
+          border-color: rgba(108,99,255,0.45);
+          background: rgba(108,99,255,0.04);
+        }
+        .pdf-dropzone.has-file {
+          border-color: rgba(67,233,123,0.4);
+          background: rgba(67,233,123,0.04);
+        }
 
         /* Slider */
         .slider-header {
@@ -630,6 +882,7 @@ export default function Flashcards() {
           border-radius: 50%;
           animation: spin 0.7s linear infinite;
           flex-shrink: 0;
+          display: inline-block;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -858,10 +1111,7 @@ export default function Flashcards() {
           margin: 0;
           line-height: 1.5;
         }
-        .mini-card-divider {
-          height: 1px;
-          background: var(--border);
-        }
+        .mini-card-divider { height: 1px; background: var(--border); }
         .mini-card-back {
           font-size: 12px;
           color: var(--text-muted);
@@ -885,20 +1135,11 @@ export default function Flashcards() {
           align-items: center;
           gap: 16px;
         }
-        .done-icon { font-size: 56px; line-height: 1; }
+        .done-icon  { font-size: 56px; line-height: 1; }
         .done-title { font-size: 28px; font-weight: 700; color: var(--text); margin: 0; }
         .done-sub   { font-size: 15px; color: var(--text-muted); margin: 0; }
-        .done-stats {
-          display: flex;
-          gap: 24px;
-          margin: 8px 0;
-        }
-        .done-stat {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 4px;
-        }
+        .done-stats { display: flex; gap: 24px; margin: 8px 0; }
+        .done-stat  { display: flex; flex-direction: column; align-items: center; gap: 4px; }
         .done-stat-val   { font-size: 28px; font-weight: 700; color: var(--primary); }
         .done-stat-label { font-size: 12px; color: var(--text-muted); }
         .done-actions {
@@ -916,6 +1157,8 @@ export default function Flashcards() {
           .toolbar span { display: none; }
           .all-grid { grid-template-columns: 1fr 1fr; }
           .done-stats { gap: 14px; }
+          .source-tabs { gap: 6px; }
+          .source-tab { padding: 8px 12px; font-size: 12px; }
         }
       `}</style>
     </div>
